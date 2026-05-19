@@ -3,7 +3,7 @@ import time
 from typing import Any, Callable
 
 from app.config import Settings
-from app.models import StoredSignal
+from app.models import OrderType, PlannedOrder, SignalSide
 
 logger = logging.getLogger(__name__)
 
@@ -18,87 +18,146 @@ class ExchangeService:
         self.session = session or self._build_session()
 
     def _build_session(self) -> Any:
-        if not self.settings.bybit_api_key or not self.settings.bybit_api_secret:
-            logger.warning("Bybit API key/secret is empty. Exchange calls will fail until .env is configured.")
+        if not self.settings.binance_api_key or not self.settings.binance_api_secret:
+            logger.warning("Binance API key/secret is empty. Exchange calls will fail until .env is configured.")
         try:
-            from pybit.unified_trading import HTTP
+            import ccxt
         except ImportError as exc:
-            raise ExchangeError("pybit is not installed. Run pip install -r requirements.txt") from exc
-        return HTTP(
-            testnet=self.settings.bybit_testnet,
-            api_key=self.settings.bybit_api_key,
-            api_secret=self.settings.bybit_api_secret,
+            raise ExchangeError("ccxt is not installed. Run pip install -r requirements.txt") from exc
+
+        exchange = ccxt.binanceusdm(
+            {
+                "apiKey": self.settings.binance_api_key,
+                "secret": self.settings.binance_api_secret,
+                "enableRateLimit": True,
+                "options": {"defaultType": "future", "adjustForTimeDifference": True},
+            }
         )
+        if self.settings.binance_testnet:
+            exchange.set_sandbox_mode(True)
+        return exchange
 
     def get_usdt_balance(self) -> float:
-        data = self._retry(lambda: self.session.get_wallet_balance(accountType="UNIFIED", coin="USDT"))
-        coins = data.get("result", {}).get("list", [{}])[0].get("coin", [])
-        for coin in coins:
-            if coin.get("coin") == "USDT":
-                value = coin.get("walletBalance") or coin.get("equity") or 0
-                return float(value)
-        return 0.0
+        data = self._retry(lambda: self.session.fetch_balance({"type": "future"}))
+        if "USDT" in data:
+            return float(data["USDT"].get("free") or data["USDT"].get("total") or 0)
+        return float(data.get("free", {}).get("USDT") or data.get("total", {}).get("USDT") or 0)
+
+    def get_positions(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+        ccxt_symbols = [self._ccxt_symbol(symbol) for symbol in symbols] if symbols else None
+        return self._retry(lambda: self.session.fetch_positions(ccxt_symbols))
 
     def get_position(self, symbol: str) -> dict[str, Any] | None:
-        data = self._retry(lambda: self.session.get_positions(category="linear", symbol=symbol))
-        positions = data.get("result", {}).get("list", [])
+        positions = self.get_positions([symbol])
         for position in positions:
-            if float(position.get("size") or 0) > 0:
+            contracts = position.get("contracts")
+            if contracts is None:
+                info = position.get("info", {})
+                contracts = info.get("positionAmt") or 0
+            if abs(float(contracts or 0)) > 0:
                 return position
         return None
 
     def has_open_position(self, symbol: str) -> bool:
         return self.get_position(symbol) is not None
 
-    def set_leverage(self, symbol: str, leverage: int) -> None:
-        self._retry(
-            lambda: self.session.set_leverage(
-                category="linear",
-                symbol=symbol,
-                buyLeverage=str(leverage),
-                sellLeverage=str(leverage),
+    def set_leverage(self, symbol: str, leverage: int) -> Any:
+        return self._retry(lambda: self.session.set_leverage(leverage, self._ccxt_symbol(symbol)))
+
+    def normalize_quantity(self, symbol: str, qty: float) -> float:
+        ccxt_symbol = self._ccxt_symbol(symbol)
+        self._load_markets()
+        try:
+            value = float(self.session.amount_to_precision(ccxt_symbol, qty))
+        except Exception as exc:
+            raise ExchangeError(f"Failed to normalize quantity precision: {exc}") from exc
+        if value <= 0:
+            raise ExchangeError("Calculated quantity is below Binance minimum precision")
+        return value
+
+    def normalize_price(self, symbol: str, price: float) -> float:
+        ccxt_symbol = self._ccxt_symbol(symbol)
+        self._load_markets()
+        try:
+            return float(self.session.price_to_precision(ccxt_symbol, price))
+        except Exception as exc:
+            raise ExchangeError(f"Failed to normalize price precision: {exc}") from exc
+
+    def place_entry_order(self, plan: PlannedOrder) -> dict[str, Any]:
+        ccxt_symbol = self._ccxt_symbol(plan.symbol)
+        side = "buy" if plan.side == SignalSide.long else "sell"
+        qty = self.normalize_quantity(plan.symbol, plan.quantity)
+        price = self.normalize_price(plan.symbol, plan.entry_price) if plan.order_type == OrderType.limit else None
+        params = {"timeInForce": "GTC"} if plan.order_type == OrderType.limit else {}
+        return self._retry(lambda: self.session.create_order(ccxt_symbol, plan.order_type.value, side, qty, price, params))
+
+    def place_reduce_only_market(self, symbol: str, side: SignalSide, qty: float) -> dict[str, Any]:
+        ccxt_symbol = self._ccxt_symbol(symbol)
+        exit_side = "sell" if side == SignalSide.long else "buy"
+        qty = self.normalize_quantity(symbol, qty)
+        return self._retry(
+            lambda: self.session.create_order(ccxt_symbol, "market", exit_side, qty, None, {"reduceOnly": True})
+        )
+
+    def place_stop_market(self, symbol: str, side: SignalSide, qty: float, stop_price: float) -> dict[str, Any]:
+        ccxt_symbol = self._ccxt_symbol(symbol)
+        exit_side = "sell" if side == SignalSide.long else "buy"
+        qty = self.normalize_quantity(symbol, qty)
+        stop_price = self.normalize_price(symbol, stop_price)
+        return self._retry(
+            lambda: self.session.create_order(
+                ccxt_symbol,
+                "STOP_MARKET",
+                exit_side,
+                qty,
+                None,
+                {"reduceOnly": True, "workingType": "MARK_PRICE", "stopPrice": stop_price},
             )
         )
 
-    def place_entry_order(self, signal: StoredSignal, qty: float) -> dict[str, Any]:
-        side = "Buy" if signal.side.value == "long" else "Sell"
-        params: dict[str, Any] = {
-            "category": "linear",
-            "symbol": signal.symbol,
-            "side": side,
-            "orderType": "Limit" if signal.order_type.value == "limit" else "Market",
-            "qty": str(qty),
-        }
-        if signal.order_type.value == "limit":
-            params["price"] = str(signal.entry)
-            params["timeInForce"] = "GTC"
-        return self._retry(lambda: self.session.place_order(**params))
+    def place_take_profit_market(self, symbol: str, side: SignalSide, qty: float, stop_price: float) -> dict[str, Any]:
+        ccxt_symbol = self._ccxt_symbol(symbol)
+        exit_side = "sell" if side == SignalSide.long else "buy"
+        qty = self.normalize_quantity(symbol, qty)
+        stop_price = self.normalize_price(symbol, stop_price)
+        return self._retry(
+            lambda: self.session.create_order(
+                ccxt_symbol,
+                "TAKE_PROFIT_MARKET",
+                exit_side,
+                qty,
+                None,
+                {"reduceOnly": True, "workingType": "MARK_PRICE", "stopPrice": stop_price},
+            )
+        )
 
-    def set_stop_loss_take_profit(self, signal: StoredSignal) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "category": "linear",
-            "symbol": signal.symbol,
-            "stopLoss": str(signal.stop_loss),
-            "slTriggerBy": "LastPrice",
-            "positionIdx": 0,
-        }
-        if signal.take_profit:
-            params["takeProfit"] = str(signal.take_profit)
-            params["tpTriggerBy"] = "LastPrice"
-        return self._retry(lambda: self.session.set_trading_stop(**params))
+    def fetch_order(self, order_id: str, symbol: str) -> dict[str, Any]:
+        return self._retry(lambda: self.session.fetch_order(order_id, self._ccxt_symbol(symbol)))
 
-    def _retry(self, func: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, symbol: str) -> dict[str, Any]:
+        return self._retry(lambda: self.session.cancel_order(order_id, self._ccxt_symbol(symbol)))
+
+    def _load_markets(self) -> None:
+        if hasattr(self.session, "markets") and self.session.markets:
+            return
+        self._retry(lambda: self.session.load_markets())
+
+    def _ccxt_symbol(self, symbol: str) -> str:
+        if "/" in symbol:
+            return symbol
+        if symbol.endswith("USDT"):
+            base = symbol.removesuffix("USDT")
+            return f"{base}/USDT:USDT"
+        return symbol
+
+    def _retry(self, func: Callable[[], Any]) -> Any:
         last_error: Exception | None = None
-        for attempt in range(1, self.settings.retry_count + 1):
+        for attempt in range(1, self.settings.api_retry_count + 1):
             try:
-                response = func()
-                ret_code = response.get("retCode", 0)
-                if ret_code not in (0, "0"):
-                    raise ExchangeError(f"Bybit error {ret_code}: {response.get('retMsg')}")
-                return response
+                return func()
             except Exception as exc:
                 last_error = exc
-                logger.warning("Bybit API call failed (%s/%s): %s", attempt, self.settings.retry_count, exc)
-                if attempt < self.settings.retry_count:
+                logger.warning("Binance API call failed (%s/%s): %s", attempt, self.settings.api_retry_count, exc)
+                if attempt < self.settings.api_retry_count:
                     time.sleep(0.2 * attempt)
         raise ExchangeError(str(last_error))
