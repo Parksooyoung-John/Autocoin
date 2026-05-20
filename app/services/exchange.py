@@ -34,8 +34,22 @@ class ExchangeService:
             }
         )
         if self.settings.binance_testnet:
-            exchange.set_sandbox_mode(True)
+            self._use_binance_demo_futures(exchange)
         return exchange
+
+    def _use_binance_demo_futures(self, exchange: Any) -> None:
+        demo_base = "https://demo-fapi.binance.com"
+        exchange.urls["api"].update(
+            {
+                "fapiPublic": f"{demo_base}/fapi/v1",
+                "fapiPublicV2": f"{demo_base}/fapi/v2",
+                "fapiPublicV3": f"{demo_base}/fapi/v3",
+                "fapiPrivate": f"{demo_base}/fapi/v1",
+                "fapiPrivateV2": f"{demo_base}/fapi/v2",
+                "fapiPrivateV3": f"{demo_base}/fapi/v3",
+                "fapiData": f"{demo_base}/futures/data",
+            }
+        )
 
     def get_usdt_balance(self) -> float:
         data = self._retry(lambda: self.session.fetch_balance({"type": "future"}))

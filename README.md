@@ -2,7 +2,7 @@
 
 TradingView Alert를 FastAPI Webhook 서버로 받아 Binance USDT-M Futures Testnet에서 자동 주문하는 Python 봇입니다. 대상 종목은 `BTCUSDT`, `ETHUSDT`, `XRPUSDT`이며 기본 레버리지는 5배입니다.
 
-기본값은 안전을 위해 `BINANCE_TESTNET=true`입니다. 실전 주문은 `.env`에서 `BINANCE_TESTNET=false`로 명시했을 때만 사용합니다.
+기본값은 안전을 위해 `BINANCE_TESTNET=true`입니다. 이 값이 `true`이면 Binance Futures Demo Trading endpoint(`https://demo-fapi.binance.com`)를 사용합니다. 실전 주문은 `.env`에서 `BINANCE_TESTNET=false`로 명시했을 때만 사용합니다.
 
 ## 역할 분담
 
@@ -41,7 +41,13 @@ MAX_DAILY_LOSS_PERCENT=5
 RISK_PER_TRADE_PERCENT=1.5
 ```
 
-Binance API Key에는 출금 권한을 절대 부여하지 마세요. Testnet 검증 전에는 `BINANCE_TESTNET=false`로 바꾸지 마세요.
+Binance API Key에는 출금 권한을 절대 부여하지 마세요. Testnet/Demo 검증 전에는 `BINANCE_TESTNET=false`로 바꾸지 마세요.
+
+Binance Futures 모의 운영용 API Key는 기존 Futures Testnet이 아니라 Binance Demo Trading API 관리 화면에서 발급합니다.
+
+```text
+https://demo.binance.com/en/my/settings/api-management
+```
 
 ## 실행
 

@@ -1,9 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 load_dotenv()
@@ -27,12 +28,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("TELEGRAM_CHAT_ID", "ADMIN_CHAT_ID"),
     )
 
-    supported_symbols: list[str] = Field(default=["BTCUSDT", "ETHUSDT", "XRPUSDT"], alias="SUPPORTED_SYMBOLS")
-    symbol_weights: dict[str, float] = Field(
+    supported_symbols: Annotated[list[str], NoDecode] = Field(
+        default=["BTCUSDT", "ETHUSDT", "XRPUSDT"],
+        alias="SUPPORTED_SYMBOLS",
+    )
+    symbol_weights: Annotated[dict[str, float], NoDecode] = Field(
         default={"BTCUSDT": 0.4, "ETHUSDT": 0.4, "XRPUSDT": 0.2},
         alias="SYMBOL_WEIGHTS",
     )
-    symbol_leverages: dict[str, int] = Field(default={}, alias="SYMBOL_LEVERAGES")
+    symbol_leverages: Annotated[dict[str, int], NoDecode] = Field(default={}, alias="SYMBOL_LEVERAGES")
 
     default_leverage: int = Field(default=5, alias="DEFAULT_LEVERAGE")
     max_leverage: int = Field(default=5, alias="MAX_LEVERAGE")
