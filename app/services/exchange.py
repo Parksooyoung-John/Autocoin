@@ -30,7 +30,11 @@ class ExchangeService:
                 "apiKey": self.settings.binance_api_key,
                 "secret": self.settings.binance_api_secret,
                 "enableRateLimit": True,
-                "options": {"defaultType": "future", "adjustForTimeDifference": True},
+                "options": {
+                    "defaultType": "future",
+                    "adjustForTimeDifference": True,
+                    "fetchCurrencies": False,
+                },
             }
         )
         if self.settings.binance_testnet:
