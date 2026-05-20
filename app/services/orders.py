@@ -1,3 +1,5 @@
+import time
+
 from app.config import Settings
 from app.models import PlannedOrder, SignalAction, SignalSide, SignalStatus, TradingViewSignal
 from app.services.database import Database
@@ -29,6 +31,7 @@ class OrderService:
         self.exchange.set_leverage(plan.symbol, plan.leverage)
         response = self.exchange.place_entry_order(plan)
         order_id = extract_order_id(response)
+        response = self._wait_for_entry_fill(order_id, plan, response)
         self.db.create_order(
             signal_id=signal.signal_id,
             symbol=plan.symbol,
@@ -41,6 +44,18 @@ class OrderService:
             status=response.get("status") or "submitted",
             exchange_response=response,
         )
+
+        filled_qty = filled_quantity(response)
+        if filled_qty <= 0 and response.get("status") != "closed":
+            if order_id:
+                cancel_response = self.exchange.cancel_order(order_id, plan.symbol)
+                self.db.update_order_status(order_id, "cancelled", exchange_response=cancel_response)
+            self.db.update_signal_status(signal.signal_id or "", SignalStatus.cancelled)
+            response["status"] = "cancelled"
+            return plan
+
+        if filled_qty > 0:
+            plan.quantity = filled_qty
 
         self.db.upsert_position(
             symbol=plan.symbol,
@@ -63,6 +78,7 @@ class OrderService:
         side = SignalSide(position["side"])
         qty = float(position["remaining_quantity"])
         response = self.exchange.place_reduce_only_market(signal.symbol, side, qty)
+        cancel_response = self.exchange.cancel_open_algo_orders(signal.symbol)
         order_id = extract_order_id(response)
         self.db.create_order(
             signal_id=signal.signal_id,
@@ -74,7 +90,7 @@ class OrderService:
             leverage=int(position["leverage"]),
             order_id=order_id,
             status=response.get("status") or "submitted",
-            exchange_response=response,
+            exchange_response={"close": response, "cancel_algo": cancel_response},
         )
         self.db.close_position(signal.symbol)
         self.db.update_signal_status(signal.signal_id or "", SignalStatus.closed)
@@ -87,6 +103,7 @@ class OrderService:
         side = SignalSide(position["side"])
         qty = float(position["remaining_quantity"])
         response = self.exchange.place_reduce_only_market(symbol, side, qty)
+        cancel_response = self.exchange.cancel_open_algo_orders(symbol)
         self.db.create_order(
             signal_id=None,
             symbol=symbol,
@@ -97,7 +114,7 @@ class OrderService:
             leverage=int(position["leverage"]),
             order_id=extract_order_id(response),
             status=response.get("status") or "submitted",
-            exchange_response={"reason": reason, "exchange": response},
+            exchange_response={"reason": reason, "exchange": response, "cancel_algo": cancel_response},
         )
         self.db.close_position(symbol)
         return response
@@ -134,6 +151,33 @@ class OrderService:
                 exchange_response=response,
             )
 
+    def _wait_for_entry_fill(self, order_id: str, plan: PlannedOrder, response: dict) -> dict:
+        if filled_quantity(response) > 0 or response.get("status") == "closed":
+            return response
+        if not order_id:
+            return response
+
+        deadline = time.time() + self.settings.order_timeout_seconds
+        latest = response
+        while time.time() < deadline:
+            time.sleep(1)
+            latest = self.exchange.fetch_order(order_id, plan.symbol)
+            if filled_quantity(latest) > 0 or latest.get("status") == "closed":
+                return latest
+            if latest.get("status") in {"canceled", "cancelled", "rejected", "expired"}:
+                return latest
+        return latest
+
 
 def extract_order_id(response: dict) -> str:
     return str(response.get("id") or response.get("orderId") or response.get("info", {}).get("orderId") or "")
+
+
+def filled_quantity(response: dict) -> float:
+    filled = response.get("filled")
+    if filled is None:
+        filled = response.get("info", {}).get("executedQty") or response.get("info", {}).get("cumQty")
+    try:
+        return float(filled or 0)
+    except (TypeError, ValueError):
+        return 0

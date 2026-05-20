@@ -134,6 +134,7 @@ class Database:
             conn.execute(f"ALTER TABLE {table} RENAME TO {archive}")
 
     def create_signal(self, signal: TradingViewSignal, raw_payload: dict[str, Any]) -> bool:
+        safe_payload = redact_payload(raw_payload)
         with self.connect() as conn:
             try:
                 conn.execute(
@@ -155,7 +156,7 @@ class Database:
                         signal.strategy,
                         signal.reason,
                         SignalStatus.accepted.value,
-                        json.dumps(raw_payload, ensure_ascii=False),
+                        json.dumps(safe_payload, ensure_ascii=False),
                         utc_now(),
                     ),
                 )
@@ -226,6 +227,30 @@ class Database:
                     pnl,
                     error_message,
                     json.dumps(exchange_response or {}, ensure_ascii=False, default=str),
+                ),
+            )
+
+    def update_order_status(
+        self,
+        order_id: str,
+        status: str,
+        error_message: str | None = None,
+        exchange_response: dict[str, Any] | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE orders
+                SET status = ?,
+                    error_message = COALESCE(?, error_message),
+                    exchange_response = COALESCE(?, exchange_response)
+                WHERE order_id = ?
+                """,
+                (
+                    status,
+                    error_message,
+                    json.dumps(exchange_response, ensure_ascii=False, default=str) if exchange_response else None,
+                    order_id,
                 ),
             )
 
@@ -396,6 +421,13 @@ def row_to_signal(row: sqlite3.Row) -> StoredSignal:
         error_message=row["error_message"],
         created_at=row["created_at"],
     )
+
+
+def redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_payload = dict(payload)
+    if "secret" in safe_payload:
+        safe_payload["secret"] = "<redacted>"
+    return safe_payload
 
 
 def utc_now() -> str:

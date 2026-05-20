@@ -155,6 +155,9 @@ class ExchangeService:
     def cancel_order(self, order_id: str, symbol: str) -> dict[str, Any]:
         return self._retry(lambda: self.session.cancel_order(order_id, self._ccxt_symbol(symbol)))
 
+    def cancel_open_algo_orders(self, symbol: str) -> Any:
+        return self._retry(lambda: self.session.fapiPrivateDeleteAlgoOpenOrders({"symbol": symbol}))
+
     def _load_markets(self) -> None:
         if hasattr(self.session, "markets") and self.session.markets:
             return

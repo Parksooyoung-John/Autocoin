@@ -32,7 +32,7 @@ class FakeExchange:
 
     def place_entry_order(self, plan):
         self.orders.append(("entry", plan.symbol, plan.quantity))
-        return {"id": "ENTRY-1", "status": "open"}
+        return {"id": "ENTRY-1", "status": "closed", "filled": plan.quantity}
 
     def place_stop_market(self, symbol, side, qty, stop_price):
         self.orders.append(("stop", symbol, qty, stop_price))
@@ -45,6 +45,17 @@ class FakeExchange:
     def place_reduce_only_market(self, symbol, side, qty):
         self.orders.append(("exit", symbol, qty))
         return {"id": "EXIT-1", "status": "closed"}
+
+    def fetch_order(self, order_id, symbol):
+        return {"id": order_id, "status": "open", "filled": 0}
+
+    def cancel_order(self, order_id, symbol):
+        self.orders.append(("cancel", symbol, order_id))
+        return {"id": order_id, "status": "canceled"}
+
+    def cancel_open_algo_orders(self, symbol):
+        self.orders.append(("cancel_algo", symbol))
+        return {"status": "ok"}
 
 
 class FakeTelegram:
@@ -68,6 +79,7 @@ def make_client(tmp_path):
         DATABASE_URL=f"sqlite:///{tmp_path / 'bot.db'}",
         BINANCE_API_KEY="",
         BINANCE_API_SECRET="",
+        ORDER_TIMEOUT_SECONDS=0,
     )
     db = Database(settings)
     db.init()
@@ -127,6 +139,22 @@ def test_webhook_orders_entry_and_notifies(tmp_path):
     assert telegram.messages[0][0] == "entry"
 
 
+def test_unfilled_limit_entry_does_not_create_position_or_protective_orders(tmp_path):
+    client, db, exchange, _ = make_client(tmp_path)
+
+    def open_entry(plan):
+        exchange.orders.append(("entry", plan.symbol, plan.quantity))
+        return {"id": "ENTRY-OPEN", "status": "open", "filled": 0}
+
+    exchange.place_entry_order = open_entry
+    response = client.post("/webhook", json=entry_payload(signal_id="BTCUSDT-open"))
+    assert response.status_code == 200
+    assert response.json()["status"] == "ordered"
+    assert db.open_position_for_symbol("BTCUSDT") is None
+    assert exchange.orders == [("entry", "BTCUSDT", 0.0125), ("cancel", "BTCUSDT", "ENTRY-OPEN")]
+    assert db.get_signal("BTCUSDT-open").status.value == "cancelled"
+
+
 def test_webhook_rejects_unsupported_symbol(tmp_path):
     client, _, _, _ = make_client(tmp_path)
     response = client.post("/webhook", json=entry_payload(symbol="SOLUSDT"))
@@ -141,7 +169,7 @@ def test_webhook_rejects_duplicate_signal_id(tmp_path):
 
 
 def test_exit_signal_closes_tracked_position(tmp_path):
-    client, db, _, telegram = make_client(tmp_path)
+    client, db, exchange, telegram = make_client(tmp_path)
     assert client.post("/webhook", json=entry_payload()).status_code == 200
     response = client.post(
         "/webhook",
@@ -160,3 +188,4 @@ def test_exit_signal_closes_tracked_position(tmp_path):
     assert response.json()["status"] == "closed"
     assert db.open_position_for_symbol("BTCUSDT") is None
     assert telegram.messages[-1][0] == "exit"
+    assert ("cancel_algo", "BTCUSDT") in exchange.orders
