@@ -1,16 +1,43 @@
 # Project Operating Rules
 
-이 프로젝트에서는 아래 운영 기준을 우선 적용한다.
+Use these rules for future work in this project.
 
-1. 연습용 방식은 추천하지 않는다.
-   - 임시 URL, 수동 curl 테스트, 일회성 PC 실행을 운영 기준으로 안내하지 않는다.
-   - Demo도 실제 운영 전 검증 환경으로 보고 Live와 같은 구조로 설정한다.
+## Trading Bot Operations
 
-2. Demo도 실전과 동일한 환경으로 설정하고 실행한다.
-   - Demo와 Live의 차이는 API endpoint, API Key, 실제 자금 여부로 제한한다.
-   - TradingView Alert, 고정 HTTPS Webhook URL, Telegram 모바일 알림, 리스크 제한, 주문/청산 흐름은 동일하게 유지한다.
+1. Do not recommend practice-only operating methods.
+   - Do not treat temporary URLs, manual curl checks, or one-off local PC runs as the operating baseline.
+   - Treat Demo as a production-like verification environment.
 
-3. 모바일로만 확인 가능하도록 자동매매를 구현한다.
-   - 운영 확인은 Telegram 모바일 알림, TradingView 모바일 알림, Binance 모바일 앱 확인을 기준으로 한다.
-   - PC 화면을 계속 봐야 하는 방식, 수동 curl 테스트, 매번 바뀌는 ngrok URL 갱신은 운영 기준으로 삼지 않는다.
-   - 실전 기준 운영은 고정 HTTPS 주소와 항상 켜져 있는 서버를 전제로 한다.
+2. Demo must match Live structurally.
+   - Demo and Live should differ only by API endpoint, API keys, and real-vs-demo funds.
+   - TradingView alerts, fixed HTTPS webhook URL, Telegram mobile alerts, risk controls, and order/exit flow must remain the same.
+
+3. The bot should be monitorable from mobile only.
+   - Use Telegram mobile alerts, TradingView mobile alerts, Binance mobile app, and mobile browser health checks as the operating baseline.
+   - Do not rely on keeping a PC screen open, manual curl tests, or rotating ngrok URLs.
+   - Real operation assumes a fixed HTTPS URL and an always-on server.
+
+## Make.com Content Automation
+
+1. Do not mark a Make scenario as successful only because modules show green checks.
+   - Confirm the final Notion page exists in the intended database.
+   - Confirm the Notion page title, body, description, hashtags, and any generated asset links are actually visible in Notion.
+   - Confirm ElevenLabs generated audio uses the cleaned TTS script, not the raw Claude response.
+
+2. Keep three separate text versions in the scenario.
+   - `raw_claude_text`: full Claude API output.
+   - `notion_text`: formatted text for Notion, preserving sections and paragraphs.
+   - `tts_text`: narration-only text for ElevenLabs, with headings, markdown, numbering noise, hashtags, and `null` removed.
+
+3. Do not send raw Claude output directly to ElevenLabs.
+   - Remove markdown headers, title candidates, thumbnail candidates, description, hashtags, separators, and literal `null`.
+   - Preserve sentence breaks naturally.
+   - Apply pronunciation normalization before ElevenLabs, including Napoleon-related replacements if needed.
+
+4. For Korean TTS pronunciation, use explicit normalization.
+   - If ElevenLabs pronounces `나폴레옹` incorrectly as `나폴롱`, use a TTS-only replacement such as `나폴레온` or another tested phonetic spelling.
+   - Keep the original spelling in Notion text if desired; only change the TTS text.
+
+5. Prefer stable section markers in Claude output.
+   - Use markers such as `[TITLE]`, `[THUMBNAIL]`, `[SCRIPT]`, `[DESCRIPTION]`, `[HASHTAGS]`, and `[TTS_SCRIPT]`.
+   - Avoid relying on loose Korean markdown headings like `# 제목 후보 5개` when parsing.
