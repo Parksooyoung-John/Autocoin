@@ -76,7 +76,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=0
 
 SUPPORTED_SYMBOLS=BTCUSDT,ETHUSDT,XRPUSDT
-SYMBOL_WEIGHTS=BTCUSDT:0.4,ETHUSDT:0.4,XRPUSDT:0.2
+SYMBOL_WEIGHTS=BTCUSDT:0.4,XRPUSDT:0.6
 SYMBOL_LEVERAGES=BTCUSDT:5,ETHUSDT:5,XRPUSDT:5
 
 DEFAULT_LEVERAGE=5
@@ -85,7 +85,7 @@ MAX_OPEN_POSITIONS=2
 RISK_PER_TRADE_PERCENT=1.5
 MAX_DAILY_LOSS_PERCENT=5
 SHORT_RISK_MULTIPLIER=0.6
-ATR_STOP_MULTIPLIER=1.5
+ATR_STOP_MULTIPLIER=2.5
 
 DEFAULT_ORDER_TYPE=limit
 ALLOW_MARKET_ENTRY=false
@@ -108,7 +108,7 @@ LOG_FILE=./logs/bot.log
 | `BINANCE_TESTNET` | `true`면 Demo endpoint를 사용합니다. Live 전환은 `false`일 때만 가능합니다. |
 | `WEBHOOK_SECRET` | TradingView에서 들어온 요청이 내 봇용 신호인지 검증합니다. 노출되면 즉시 교체하세요. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | 주문, 청산, 에러, 일일 요약 알림을 모바일로 받습니다. |
-| `SYMBOL_WEIGHTS` | BTC/ETH/XRP 기본 비중을 제어합니다. 기본은 40/40/20입니다. |
+| `SYMBOL_WEIGHTS` | 기본 포트폴리오 비중을 제어합니다. 현재 v5-LONG 기준 기본은 BTC 40%, XRP 60%이며 ETH는 보류입니다. |
 | `RISK_PER_TRADE_PERCENT` | 1회 거래 최대 손실 한도입니다. |
 | `MAX_DAILY_LOSS_PERCENT` | 하루 손실 한도입니다. 도달 시 신규 진입을 차단합니다. |
 | `DEFAULT_ORDER_TYPE` | 기본 진입 주문 방식입니다. 운영 기본값은 `limit`입니다. |

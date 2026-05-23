@@ -23,17 +23,17 @@ Use these rules for future work in this project.
    - `strategy()` is for backtesting and parameter comparison only.
    - Demo/Live webhook operation must use `indicator()` with `alert()` JSON payloads.
 
-2. Current tightened ETHUSDT 1H Demo criteria:
-   - RSI entry range: `45 <= RSI <= 70`.
-   - EMA alignment: `EMA20 > EMA60 > EMA200`.
-   - 4H MTF filter: `4H close > 4H EMA200` and `4H close > 4H EMA60`.
-   - ATR expansion filter: `ATR > SMA(ATR, 20) * 0.8`.
-   - Volume filter: `volume > Volume SMA20 * 1.2`.
-   - Cooldown: wait at least 3 bars after full exit before a new entry.
+2. Current Demo operating focus:
+   - Use v5-LONG results as the current strategy reference.
+   - Main allocation: `XRPUSDT` 4H LONG only, 50~60%.
+   - Secondary allocation: `BTCUSDT` 1D LONG only, 40~50%.
+   - `ETHUSDT` is supported by the bot but paused for Demo allocation until risk-adjusted results improve.
+   - Server `.env` should use `SYMBOL_WEIGHTS=BTCUSDT:0.4,XRPUSDT:0.6`.
 
 3. Current ATR stop setting:
    - ATR stop multiplier was changed from `2.0` to `2.5`.
    - Long stop basis: `entryPrice - (ATR * 2.5)`.
+   - Server `.env` should use `ATR_STOP_MULTIPLIER=2.5`.
    - This is intended to reduce premature stop-outs in swing trades, while accepting wider stop distance and smaller risk-adjusted position size on the bot side.
 
 4. Webhook compatibility:

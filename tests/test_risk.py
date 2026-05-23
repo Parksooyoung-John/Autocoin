@@ -38,14 +38,14 @@ def test_risk_calculates_quantity_from_balance_weight_and_atr(tmp_path):
     _, _, risk = build_risk(tmp_path)
     plan = risk.validate_entry(entry(), account_balance=10000)
     assert plan.leverage == 5
-    assert plan.stop_loss == 63800
-    assert plan.quantity == 0.125
+    assert plan.stop_loss == 63000
+    assert plan.quantity == 0.075
 
 
 def test_xrp_weight_limits_quantity(tmp_path):
     _, _, risk = build_risk(tmp_path)
     plan = risk.validate_entry(entry(symbol="XRPUSDT", price=0.5, atr=0.01), account_balance=1000)
-    assert plan.quantity == 1000
+    assert plan.quantity == 600
 
 
 def test_short_uses_smaller_risk(tmp_path):

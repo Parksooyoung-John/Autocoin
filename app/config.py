@@ -33,7 +33,7 @@ class Settings(BaseSettings):
         alias="SUPPORTED_SYMBOLS",
     )
     symbol_weights: Annotated[dict[str, float], NoDecode] = Field(
-        default={"BTCUSDT": 0.4, "ETHUSDT": 0.4, "XRPUSDT": 0.2},
+        default={"BTCUSDT": 0.4, "XRPUSDT": 0.6},
         alias="SYMBOL_WEIGHTS",
     )
     symbol_leverages: Annotated[dict[str, int], NoDecode] = Field(default={}, alias="SYMBOL_LEVERAGES")
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     max_daily_loss_percent: float = Field(default=5.0, alias="MAX_DAILY_LOSS_PERCENT")
     max_open_positions: int = Field(default=2, alias="MAX_OPEN_POSITIONS")
     short_risk_multiplier: float = Field(default=0.6, alias="SHORT_RISK_MULTIPLIER")
-    atr_stop_multiplier: float = Field(default=1.5, alias="ATR_STOP_MULTIPLIER")
+    atr_stop_multiplier: float = Field(default=2.5, alias="ATR_STOP_MULTIPLIER")
 
     default_order_type: str = Field(default="limit", alias="DEFAULT_ORDER_TYPE")
     allow_market_entry: bool = Field(default=False, alias="ALLOW_MARKET_ENTRY")
