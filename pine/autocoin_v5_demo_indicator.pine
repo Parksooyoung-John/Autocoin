@@ -1,0 +1,144 @@
+//@version=5
+indicator("AutoCoin v5 Demo Signal", overlay=true)
+
+// Demo/Live webhook alert script.
+// This indicator is LONG-only and sends bot-compatible ENTRY/EXIT alerts.
+// Backtesting must use autocoin_v5_strategy.pine instead.
+
+// === Inputs ===
+secret = input.string("CHANGE_ME", "Webhook Secret")
+botSymbol = input.string("XRPUSDT", "Bot Symbol")
+htfTimeframe = input.timeframe("240", "Higher Timeframe")
+btcFilterSymbol = input.symbol("BINANCE:BTCUSDT", "BTC Filter Symbol")
+
+adxLength = input.int(14, "ADX Length", minval=1)
+adxSmoothing = input.int(14, "ADX Smoothing", minval=1)
+adxThreshold = input.float(25.0, "ADX Regime Threshold", minval=1.0, step=0.5)
+superTrendFactor = input.float(3.0, "SuperTrend Factor", minval=0.1, step=0.1)
+superTrendAtrLength = input.int(10, "SuperTrend ATR Length", minval=1)
+longAtrStopMultiplier = input.float(2.5, "Bull ATR Stop Multiplier", minval=0.1, step=0.1)
+rangeStopPercent = input.float(2.5, "Range Stop Percent", minval=0.1, step=0.1)
+abnormalAtrMultiplier = input.float(3.0, "Abnormal ATR Filter", minval=1.0, step=0.1)
+cooldownBars = input.int(3, "Cooldown Bars After Exit", minval=0)
+
+// === Current timeframe indicators ===
+ema20 = ta.ema(close, 20)
+ema60 = ta.ema(close, 60)
+ema200 = ta.ema(close, 200)
+rsi = ta.rsi(close, 14)
+atr = ta.atr(14)
+atrSma20 = ta.sma(atr, 20)
+volSma20 = ta.sma(volume, 20)
+[plusDI, minusDI, adx] = ta.dmi(adxLength, adxSmoothing)
+[superTrend, superTrendDirection] = ta.supertrend(superTrendFactor, superTrendAtrLength)
+
+bbBasis = ta.sma(close, 20)
+bbDeviation = ta.stdev(close, 20) * 2.0
+bbUpper = bbBasis + bbDeviation
+bbLower = bbBasis - bbDeviation
+
+// === 4H confirmation, lookahead off to avoid repainting ===
+htfClose = request.security(syminfo.tickerid, htfTimeframe, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfEma60 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 60), barmerge.gaps_off, barmerge.lookahead_off)
+htfEma200 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
+
+// XRP LONG entries are blocked when BTC is weak. BTC chart does not double-filter itself.
+btcClose = request.security(btcFilterSymbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+btcEma20 = request.security(btcFilterSymbol, timeframe.period, ta.ema(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+isBtcBotSymbol = str.contains(botSymbol, "BTCUSDT")
+btcLongAllowed = isBtcBotSymbol ? true : btcClose > btcEma20
+
+// === Regime detection ===
+emaBullAligned = ema20 > ema60 and ema60 > ema200
+emaBearAligned = ema20 < ema60 and ema60 < ema200
+htfBullish = htfClose > htfEma60 and htfClose > htfEma200
+htfBearish = htfClose < htfEma60 and htfClose < htfEma200
+bullRegime = adx > adxThreshold and emaBullAligned and htfBullish
+bearRegime = adx > adxThreshold and emaBearAligned and htfBearish
+rangeRegime = not bullRegime and not bearRegime
+
+// === Position state ===
+var bool inLong = false
+var bool partialExitSeen = false
+var string activeRegime = ""
+var float entryPrice = na
+var float activeStopLoss = na
+var int lastExitBar = na
+
+// === Entry filters ===
+atrExpanded = atr > atrSma20 * 0.8
+abnormalVolatility = atr > atrSma20 * abnormalAtrMultiplier
+volumeConfirmed = volume > volSma20 * 1.2
+superTrendBullish = superTrendDirection < 0
+nearLowerBand = close <= bbLower * 1.01
+cooldownReady = na(lastExitBar) or bar_index - lastExitBar >= cooldownBars
+
+// === Alert builders ===
+buildEntryMessage(string signalId, string regimeName) =>
+    '{"secret":"' + secret + '","signal_id":"' + signalId + '","symbol":"' + botSymbol + '","side":"LONG","signal":"ENTRY","timeframe":"' + timeframe.period + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atr) + ',"strategy":"autocoin_v5_long_demo","timestamp":"' + str.tostring(time) + '","regime":"' + regimeName + '","ema200":' + str.tostring(ema200) + ',"stopLoss":' + str.tostring(activeStopLoss) + ',"superTrend":' + str.tostring(superTrend) + '}'
+
+buildExitMessage(string signalId, string reasonText) =>
+    '{"secret":"' + secret + '","signal_id":"' + signalId + '","symbol":"' + botSymbol + '","side":"LONG","signal":"EXIT","reason":"' + reasonText + '","price":' + str.tostring(close) + ',"strategy":"autocoin_v5_long_demo","timestamp":"' + str.tostring(time) + '","regime":"' + activeRegime + '","ema200":' + str.tostring(ema200) + ',"stopLoss":' + str.tostring(activeStopLoss) + ',"superTrend":' + str.tostring(superTrend) + '}'
+
+// === LONG-only entries ===
+bullLongSignal = barstate.isconfirmed and not inLong and cooldownReady and not abnormalVolatility and bullRegime and btcLongAllowed and superTrendBullish and rsi >= 45 and rsi <= 70 and atrExpanded and volumeConfirmed
+rangeLongSignal = barstate.isconfirmed and not inLong and cooldownReady and not abnormalVolatility and rangeRegime and btcLongAllowed and rsi < 35 and nearLowerBand
+
+if bullLongSignal
+    entryPrice := close
+    activeStopLoss := math.max(superTrend, entryPrice - atr * longAtrStopMultiplier)
+    activeRegime := "BULL_LONG"
+    partialExitSeen := false
+    inLong := true
+    signalId = botSymbol + "-" + str.tostring(time) + "-entry"
+    alert(buildEntryMessage(signalId, activeRegime), alert.freq_once_per_bar_close)
+
+if rangeLongSignal
+    entryPrice := close
+    activeStopLoss := entryPrice * (1.0 - rangeStopPercent / 100.0)
+    activeRegime := "RANGE_LONG"
+    partialExitSeen := false
+    inLong := true
+    signalId = botSymbol + "-" + str.tostring(time) + "-entry"
+    alert(buildEntryMessage(signalId, activeRegime), alert.freq_once_per_bar_close)
+
+// === Stop maintenance ===
+if barstate.isconfirmed and inLong and activeRegime == "BULL_LONG" and not na(entryPrice)
+    atrStop = entryPrice - atr * longAtrStopMultiplier
+    activeStopLoss := partialExitSeen ? math.max(activeStopLoss, entryPrice) : math.max(superTrend, atrStop)
+
+// Partial exits are handled by the bot's TP ladder. The indicator only moves its local stop state to breakeven.
+rsiHotTwoBars = rsi > 80 and rsi[1] > 80
+if barstate.isconfirmed and inLong and activeRegime == "BULL_LONG" and not partialExitSeen and rsiHotTwoBars and not na(entryPrice)
+    activeStopLoss := math.max(activeStopLoss, entryPrice)
+    partialExitSeen := true
+
+// === LONG-only full exits ===
+ema20BreakTwoBars = close < ema20 and close[1] < ema20[1]
+longStopHit = inLong and not na(activeStopLoss) and close <= activeStopLoss
+bullLongExitSignal = barstate.isconfirmed and inLong and activeRegime == "BULL_LONG" and (longStopHit or ema20BreakTwoBars or bearRegime)
+rangeLongExitSignal = barstate.isconfirmed and inLong and activeRegime == "RANGE_LONG" and (longStopHit or close >= bbBasis or bearRegime)
+
+if bullLongExitSignal or rangeLongExitSignal
+    reasonText = longStopHit ? "stop_loss" : bearRegime ? "bear_regime" : activeRegime == "RANGE_LONG" ? "range_mean_reversion" : "ema20_break"
+    signalId = botSymbol + "-" + str.tostring(time) + "-exit"
+    alert(buildExitMessage(signalId, reasonText), alert.freq_once_per_bar_close)
+    inLong := false
+    partialExitSeen := false
+    activeRegime := ""
+    entryPrice := na
+    activeStopLoss := na
+    lastExitBar := bar_index
+
+// === Visuals ===
+plot(ema20, "EMA20", color=color.yellow)
+plot(ema60, "EMA60", color=color.orange)
+plot(ema200, "EMA200", color=color.red)
+plot(superTrend, "SuperTrend", color=superTrendBullish ? color.lime : color.fuchsia)
+plot(activeStopLoss, "Active Stop", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(bbUpper, "BB Upper", color=color.new(color.gray, 70))
+plot(bbBasis, "BB Basis", color=color.new(color.gray, 70))
+plot(bbLower, "BB Lower", color=color.new(color.gray, 70))
+plotshape(bullLongSignal or rangeLongSignal, "ENTRY", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="ENTRY")
+plotshape(bullLongExitSignal or rangeLongExitSignal, "EXIT", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="EXIT")
+bgcolor(bullRegime ? color.new(color.green, 90) : bearRegime ? color.new(color.red, 90) : color.new(color.gray, 94))

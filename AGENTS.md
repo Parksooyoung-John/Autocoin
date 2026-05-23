@@ -27,7 +27,7 @@ Use these rules for future work in this project.
    - Use v5-LONG results as the current strategy reference.
    - Main allocation: `XRPUSDT` 4H LONG only, 50~60%.
    - Secondary allocation: `BTCUSDT` 1D LONG only, 40~50%.
-   - `ETHUSDT` is supported by the bot but paused for Demo allocation until risk-adjusted results improve.
+   - `ETHUSDT` is excluded from default bot-supported symbols and Demo alerts until risk-adjusted results improve.
    - Server `.env` should use `SYMBOL_WEIGHTS=BTCUSDT:0.4,XRPUSDT:0.6`.
 
 3. Current ATR stop setting:

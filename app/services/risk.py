@@ -45,7 +45,7 @@ class RiskService:
                 raise RiskError(f"Daily loss limit reached: {daily_loss_percent:.2f}%")
 
         stop_loss = self.stop_loss(signal.side, signal.price, signal.atr)
-        risk_percent = self.effective_risk_percent(signal.side)
+        risk_percent = self.effective_risk_percent()
         qty = self.calculate_quantity(
             symbol=signal.symbol,
             entry=signal.price,
@@ -97,11 +97,8 @@ class RiskService:
             return entry - distance
         return entry + distance
 
-    def effective_risk_percent(self, side: SignalSide) -> float:
-        risk = self.settings.risk_per_trade_percent
-        if side == SignalSide.short:
-            risk *= self.settings.short_risk_multiplier
-        return risk
+    def effective_risk_percent(self) -> float:
+        return self.settings.risk_per_trade_percent
 
     def calculate_quantity(
         self,

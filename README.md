@@ -1,4 +1,4 @@
-# BTC/ETH/XRP Binance Futures 5x 자동매매 봇
+# BTC/XRP Binance Futures 5x 자동매매 봇
 
 TradingView Alert를 FastAPI Webhook 서버로 받아 Binance USDT-M Futures에서 `BTCUSDT`, `ETHUSDT`, `XRPUSDT`를 자동매매하는 Python 봇입니다. 기본 운영 환경은 Binance Demo/Testnet이며, 실전 전환은 `.env`에서 `BINANCE_TESTNET=false`로 명시했을 때만 가능합니다.
 
@@ -75,16 +75,15 @@ WEBHOOK_SECRET=CHANGE_ME
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=0
 
-SUPPORTED_SYMBOLS=BTCUSDT,ETHUSDT,XRPUSDT
+SUPPORTED_SYMBOLS=BTCUSDT,XRPUSDT
 SYMBOL_WEIGHTS=BTCUSDT:0.4,XRPUSDT:0.6
-SYMBOL_LEVERAGES=BTCUSDT:5,ETHUSDT:5,XRPUSDT:5
+SYMBOL_LEVERAGES=BTCUSDT:5,XRPUSDT:5
 
 DEFAULT_LEVERAGE=5
 MAX_LEVERAGE=5
 MAX_OPEN_POSITIONS=2
 RISK_PER_TRADE_PERCENT=1.5
 MAX_DAILY_LOSS_PERCENT=5
-SHORT_RISK_MULTIPLIER=0.6
 ATR_STOP_MULTIPLIER=2.5
 
 DEFAULT_ORDER_TYPE=limit
@@ -321,7 +320,7 @@ curl https://autocoin.auto-coin-bot.com/positions
 
 - 기본 레버리지 5배
 - 최대 동시 포지션 2개
-- BTC/ETH/XRP 기본 비중 40/40/20
+- BTC/XRP 기본 비중 40/60
 - 1회 거래 손실 한도 기본 1.5%
 - 하루 최대 손실 기본 5%
 - 동일 심볼 중복 진입 차단

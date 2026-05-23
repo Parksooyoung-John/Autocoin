@@ -11,7 +11,7 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    app_name: str = "BTC/ETH/XRP Binance Futures 5x Auto Trading Bot"
+    app_name: str = "BTC/XRP Binance Futures 5x Auto Trading Bot"
 
     webhook_secret: str = Field(
         default="CHANGE_ME",
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     )
 
     supported_symbols: Annotated[list[str], NoDecode] = Field(
-        default=["BTCUSDT", "ETHUSDT", "XRPUSDT"],
+        default=["BTCUSDT", "XRPUSDT"],
         alias="SUPPORTED_SYMBOLS",
     )
     symbol_weights: Annotated[dict[str, float], NoDecode] = Field(
@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     risk_per_trade_percent: float = Field(default=1.5, alias="RISK_PER_TRADE_PERCENT")
     max_daily_loss_percent: float = Field(default=5.0, alias="MAX_DAILY_LOSS_PERCENT")
     max_open_positions: int = Field(default=2, alias="MAX_OPEN_POSITIONS")
-    short_risk_multiplier: float = Field(default=0.6, alias="SHORT_RISK_MULTIPLIER")
     atr_stop_multiplier: float = Field(default=2.5, alias="ATR_STOP_MULTIPLIER")
 
     default_order_type: str = Field(default="limit", alias="DEFAULT_ORDER_TYPE")

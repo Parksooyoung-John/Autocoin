@@ -48,14 +48,6 @@ def test_xrp_weight_limits_quantity(tmp_path):
     assert plan.quantity == 600
 
 
-def test_short_uses_smaller_risk(tmp_path):
-    _, _, risk = build_risk(tmp_path)
-    long_plan = risk.validate_entry(entry(signal_id="long", side="LONG"), account_balance=10000)
-    short_plan = risk.validate_entry(entry(signal_id="short", side="SHORT"), account_balance=10000)
-    assert short_plan.risk_percent < long_plan.risk_percent
-    assert short_plan.quantity < long_plan.quantity
-
-
 def test_blocks_daily_loss_limit(tmp_path):
     _, db, risk = build_risk(tmp_path)
     db.create_order(
@@ -91,7 +83,11 @@ def test_blocks_duplicate_symbol_position(tmp_path):
 
 
 def test_blocks_third_open_position(tmp_path):
-    _, db, risk = build_risk(tmp_path)
+    _, db, risk = build_risk(
+        tmp_path,
+        SUPPORTED_SYMBOLS=["BTCUSDT", "ETHUSDT", "XRPUSDT"],
+        SYMBOL_WEIGHTS={"BTCUSDT": 0.4, "ETHUSDT": 0.0, "XRPUSDT": 0.6},
+    )
     for symbol in ("BTCUSDT", "ETHUSDT"):
         db.upsert_position(
             symbol=symbol,

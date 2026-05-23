@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
         await telegram.stop()
 
 
-app = FastAPI(title="BTC/ETH/XRP Binance Futures 5x Auto Trading Bot", lifespan=lifespan)
+app = FastAPI(title="BTC/XRP Binance Futures 5x Auto Trading Bot", lifespan=lifespan)
 app.include_router(webhook_router)
 
 
