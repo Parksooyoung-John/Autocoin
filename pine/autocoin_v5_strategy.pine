@@ -1,0 +1,231 @@
+//@version=5
+// AutoCoin v5 Strategy
+// - Backtest-only strategy() script. Do not use this file for Demo/Live webhook alerts.
+// - Adds Bull/Bear/Range regime branching, SuperTrend confirmation, volatility-based sizing, and multi-stop exits.
+// - Target use: apply the same script to BTCUSDT, ETHUSDT, and XRPUSDT 1H charts in TradingView.
+strategy("AutoCoin v5 Regime SuperTrend Strategy", overlay=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.05, pyramiding=0, process_orders_on_close=true)
+
+// === Inputs ===
+htfTimeframe = input.timeframe("240", "Higher Timeframe")
+btcFilterSymbol = input.symbol("BINANCE:BTCUSDT", "BTC Filter Symbol")
+
+emaFastLen = input.int(20, "EMA Fast Length", minval=1)
+emaMidLen = input.int(60, "EMA Mid Length", minval=1)
+emaSlowLen = input.int(200, "EMA Slow Length", minval=1)
+rsiLen = input.int(14, "RSI Length", minval=1)
+atrLen = input.int(14, "ATR Length", minval=1)
+atrSmaLen = input.int(20, "ATR SMA Length", minval=1)
+volSmaLen = input.int(20, "Volume SMA Length", minval=1)
+adxLen = input.int(14, "ADX Length", minval=1)
+adxSmoothing = input.int(14, "ADX Smoothing", minval=1)
+adxThreshold = input.float(25.0, "ADX Regime Threshold", minval=1.0, step=0.5)
+
+superTrendAtrLen = input.int(10, "SuperTrend ATR Length", minval=1)
+superTrendFactor = input.float(3.0, "SuperTrend Factor", minval=0.1, step=0.1)
+
+longAtrStopMult = input.float(2.5, "Bull LONG ATR Stop Multiplier", minval=0.1, step=0.1)
+shortAtrStopMult = input.float(1.5, "Bear SHORT ATR Stop Multiplier", minval=0.1, step=0.1)
+rangeStopPercent = input.float(2.5, "Range Fixed Stop %", minval=0.1, step=0.1)
+abnormalAtrMult = input.float(3.0, "Abnormal Volatility ATR Multiplier", minval=1.0, step=0.1)
+cooldownBars = input.int(3, "Cooldown Bars After Full Exit", minval=0)
+
+bullRiskPercent = input.float(1.0, "Bull Risk % of Equity", minval=0.1, step=0.1)
+bearRiskPercent = input.float(0.6, "Bear Risk % of Equity", minval=0.1, step=0.1)
+rangeRiskPercent = input.float(0.4, "Range Risk % of Equity", minval=0.1, step=0.1)
+bullMaxExposurePercent = input.float(15.0, "Bull Max Exposure %", minval=0.1, step=0.1)
+bearMaxExposurePercent = input.float(8.0, "Bear Max Exposure %", minval=0.1, step=0.1)
+rangeMaxExposurePercent = input.float(5.0, "Range Max Exposure %", minval=0.1, step=0.1)
+
+bbLen = input.int(20, "Range Bollinger Length", minval=1)
+bbMult = input.float(2.0, "Range Bollinger Multiplier", minval=0.1, step=0.1)
+bbNearPercent = input.float(1.0, "Range Band Nearness %", minval=0.1, step=0.1)
+
+// === Current timeframe indicators ===
+ema20 = ta.ema(close, emaFastLen)
+ema60 = ta.ema(close, emaMidLen)
+ema200 = ta.ema(close, emaSlowLen)
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
+atrSma = ta.sma(atr, atrSmaLen)
+volSma20 = ta.sma(volume, volSmaLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxSmoothing)
+[superTrend, superTrendDirection] = ta.supertrend(superTrendFactor, superTrendAtrLen)
+
+// TradingView's ta.supertrend() convention: direction < 0 is bullish, direction > 0 is bearish.
+superTrendBullish = superTrendDirection < 0
+superTrendBearish = superTrendDirection > 0
+
+// === Higher timeframe confirmation, no lookahead ===
+htfClose = request.security(syminfo.tickerid, htfTimeframe, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfEma60 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, emaMidLen), barmerge.gaps_off, barmerge.lookahead_off)
+htfEma200 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, emaSlowLen), barmerge.gaps_off, barmerge.lookahead_off)
+
+// === BTC correlation filter for altcoin LONG entries ===
+btcClose = request.security(btcFilterSymbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+btcEma20 = request.security(btcFilterSymbol, timeframe.period, ta.ema(close, emaFastLen), barmerge.gaps_off, barmerge.lookahead_off)
+isBtcChart = str.contains(syminfo.ticker, "BTCUSDT")
+btcLongAllowed = isBtcChart ? true : btcClose > btcEma20
+
+// === Range helpers ===
+bbBasis = ta.sma(close, bbLen)
+bbDev = ta.stdev(close, bbLen) * bbMult
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+nearLowerBand = close <= bbLower * (1 + bbNearPercent / 100)
+nearUpperBand = close >= bbUpper * (1 - bbNearPercent / 100)
+
+// === Regime detection ===
+emaBullAligned = ema20 > ema60 and ema60 > ema200
+emaBearAligned = ema20 < ema60 and ema60 < ema200
+htfBullish = htfClose > htfEma60 and htfClose > htfEma200
+htfBearish = htfClose < htfEma60 and htfClose < htfEma200
+bullRegime = adx > adxThreshold and emaBullAligned and htfBullish
+bearRegime = adx > adxThreshold and emaBearAligned and htfBearish
+rangeRegime = not bullRegime and not bearRegime
+
+// === Shared filters ===
+atrExpanded = atr > atrSma * 0.8
+volumeConfirmed = volume > volSma20 * 1.2
+abnormalVolatility = atr > atrSma * abnormalAtrMult
+
+// === Persistent trade state ===
+var int lastExitBar = na
+var bool partialExitSent = false
+var float activeStopLoss = na
+var string activeRegime = ""
+
+flat = strategy.position_size == 0
+longPosition = strategy.position_size > 0
+shortPosition = strategy.position_size < 0
+cooldownPassed = na(lastExitBar) or bar_index - lastExitBar >= cooldownBars
+canEnter = barstate.isconfirmed and flat and cooldownPassed and not abnormalVolatility
+
+// === Position sizing ===
+calcQty(float stopDistance, float riskPercent, float maxExposurePercent) =>
+    equityRisk = strategy.equity * riskPercent / 100
+    qtyByRisk = stopDistance > 0 ? equityRisk / stopDistance : 0.0
+    qtyByExposure = strategy.equity * maxExposurePercent / 100 / close
+    math.max(math.min(qtyByRisk, qtyByExposure), 0.0)
+
+// === Entry conditions ===
+bullLongSignal = canEnter and bullRegime and superTrendBullish and btcLongAllowed and rsi >= 45 and rsi <= 70 and atrExpanded and volumeConfirmed
+bearShortSignal = canEnter and bearRegime and superTrendBearish and rsi >= 30 and rsi <= 55 and atrExpanded and volumeConfirmed
+rangeLongSignal = canEnter and rangeRegime and rsi < 35 and nearLowerBand
+rangeShortSignal = canEnter and rangeRegime and rsi > 65 and nearUpperBand
+
+if bullLongSignal
+    atrStop = close - atr * longAtrStopMult
+    stopCandidate = math.max(superTrend, atrStop)
+    qty = calcQty(close - stopCandidate, bullRiskPercent, bullMaxExposurePercent)
+    if qty > 0
+        strategy.entry("BULL_LONG", strategy.long, qty=qty, comment="BULL_LONG")
+        activeStopLoss := stopCandidate
+        activeRegime := "BULL"
+        partialExitSent := false
+
+if bearShortSignal
+    atrStop = close + atr * shortAtrStopMult
+    stopCandidate = math.min(superTrend, atrStop)
+    qty = calcQty(stopCandidate - close, bearRiskPercent, bearMaxExposurePercent)
+    if qty > 0
+        strategy.entry("BEAR_SHORT", strategy.short, qty=qty, comment="BEAR_SHORT")
+        activeStopLoss := stopCandidate
+        activeRegime := "BEAR"
+        partialExitSent := false
+
+if rangeLongSignal
+    stopCandidate = close * (1 - rangeStopPercent / 100)
+    qty = calcQty(close - stopCandidate, rangeRiskPercent, rangeMaxExposurePercent)
+    if qty > 0
+        strategy.entry("RANGE_LONG", strategy.long, qty=qty, comment="RANGE_LONG")
+        activeStopLoss := stopCandidate
+        activeRegime := "RANGE_LONG"
+        partialExitSent := false
+
+if rangeShortSignal
+    stopCandidate = close * (1 + rangeStopPercent / 100)
+    qty = calcQty(stopCandidate - close, rangeRiskPercent, rangeMaxExposurePercent)
+    if qty > 0
+        strategy.entry("RANGE_SHORT", strategy.short, qty=qty, comment="RANGE_SHORT")
+        activeStopLoss := stopCandidate
+        activeRegime := "RANGE_SHORT"
+        partialExitSent := false
+
+// === Stop maintenance ===
+if barstate.isconfirmed and longPosition
+    bullAtrStop = strategy.position_avg_price - atr * longAtrStopMult
+    bullStop = activeRegime == "BULL" ? math.max(superTrend, bullAtrStop) : activeStopLoss
+    activeStopLoss := partialExitSent ? math.max(activeStopLoss, strategy.position_avg_price) : bullStop
+
+if barstate.isconfirmed and shortPosition
+    bearAtrStop = strategy.position_avg_price + atr * shortAtrStopMult
+    bearStop = activeRegime == "BEAR" ? math.min(superTrend, bearAtrStop) : activeStopLoss
+    activeStopLoss := partialExitSent ? math.min(activeStopLoss, strategy.position_avg_price) : bearStop
+
+// === Exit conditions ===
+rsiHotTwoBars = rsi > 80 and rsi[1] > 80
+ema20BreakTwoBars = close < ema20 and close[1] < ema20[1]
+rsiColdTwoBars = rsi < 20 and rsi[1] < 20
+ema20ReclaimTwoBars = close > ema20 and close[1] > ema20[1]
+
+longStopHit = longPosition and not na(activeStopLoss) and close <= activeStopLoss
+shortStopHit = shortPosition and not na(activeStopLoss) and close >= activeStopLoss
+
+longPartialSignal = barstate.isconfirmed and longPosition and activeRegime == "BULL" and not partialExitSent and rsiHotTwoBars
+shortPartialSignal = barstate.isconfirmed and shortPosition and activeRegime == "BEAR" and not partialExitSent and rsiColdTwoBars
+
+longFullSignal = barstate.isconfirmed and longPosition and activeRegime == "BULL" and (longStopHit or ema20BreakTwoBars or bearRegime)
+shortFullSignal = barstate.isconfirmed and shortPosition and activeRegime == "BEAR" and (shortStopHit or ema20ReclaimTwoBars or bullRegime)
+rangeLongFullSignal = barstate.isconfirmed and longPosition and activeRegime == "RANGE_LONG" and (longStopHit or close >= bbBasis or bearRegime)
+rangeShortFullSignal = barstate.isconfirmed and shortPosition and activeRegime == "RANGE_SHORT" and (shortStopHit or close <= bbBasis or bullRegime)
+
+if longPartialSignal
+    strategy.close("BULL_LONG", qty_percent=50, comment="BULL_LONG_PARTIAL")
+    activeStopLoss := strategy.position_avg_price
+    partialExitSent := true
+
+if shortPartialSignal
+    strategy.close("BEAR_SHORT", qty_percent=50, comment="BEAR_SHORT_PARTIAL")
+    activeStopLoss := strategy.position_avg_price
+    partialExitSent := true
+
+if longFullSignal or rangeLongFullSignal
+    strategy.close_all(comment="LONG_FULL_EXIT")
+    lastExitBar := bar_index
+    activeStopLoss := na
+    activeRegime := ""
+    partialExitSent := false
+
+if shortFullSignal or rangeShortFullSignal
+    strategy.close_all(comment="SHORT_FULL_EXIT")
+    lastExitBar := bar_index
+    activeStopLoss := na
+    activeRegime := ""
+    partialExitSent := false
+
+// === Visuals ===
+plot(ema20, "EMA20", color=color.yellow)
+plot(ema60, "EMA60", color=color.orange)
+plot(ema200, "EMA200", color=color.red)
+plot(superTrend, "SuperTrend", color=superTrendBullish ? color.lime : color.fuchsia, linewidth=2)
+plot(activeStopLoss, "Active Stop", color=color.new(color.white, 0), style=plot.style_linebr)
+plot(bbUpper, "Range BB Upper", color=color.new(color.blue, 70))
+plot(bbBasis, "Range BB Basis", color=color.new(color.blue, 80))
+plot(bbLower, "Range BB Lower", color=color.new(color.blue, 70))
+
+bgcolor(bullRegime ? color.new(color.green, 88) : bearRegime ? color.new(color.red, 88) : color.new(color.gray, 92), title="Regime Background")
+
+var table statsTable = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    winRate = strategy.closedtrades > 0 ? strategy.wintrades / strategy.closedtrades * 100 : 0.0
+    profitFactor = strategy.grossloss != 0 ? strategy.grossprofit / math.abs(strategy.grossloss) : na
+    table.cell(statsTable, 0, 0, "Regime", text_color=color.white)
+    table.cell(statsTable, 1, 0, bullRegime ? "BULL" : bearRegime ? "BEAR" : "RANGE", text_color=color.white)
+    table.cell(statsTable, 0, 1, "Win Rate", text_color=color.white)
+    table.cell(statsTable, 1, 1, str.tostring(winRate, "#.##") + "%", text_color=color.white)
+    table.cell(statsTable, 0, 2, "Profit Factor", text_color=color.white)
+    table.cell(statsTable, 1, 2, na(profitFactor) ? "n/a" : str.tostring(profitFactor, "#.##"), text_color=color.white)
+    table.cell(statsTable, 0, 3, "Closed Trades", text_color=color.white)
+    table.cell(statsTable, 1, 3, str.tostring(strategy.closedtrades), text_color=color.white)
+    table.cell(statsTable, 0, 4, "Active Stop", text_color=color.white)
+    table.cell(statsTable, 1, 4, na(activeStopLoss) ? "n/a" : str.tostring(activeStopLoss, format.mintick), text_color=color.white)
