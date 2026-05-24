@@ -1,0 +1,89 @@
+//@version=5
+indicator("AutoCoin v6-B Donchian Demo Signal", overlay=true)
+
+// Demo/Live webhook alert script.
+// This indicator is LONG-only and sends bot-compatible ENTRY/EXIT alerts.
+// Backtesting must use autocoin_v6b_strategy.pine instead.
+// v6-B B_30_15 is fixed: Donchian entry 30 bars, exit channel 15 bars.
+
+// === Inputs ===
+secret = input.string("CHANGE_ME", "Webhook Secret")
+botSymbol = input.string("XRPUSDT", "Bot Symbol")
+btcFilterSymbol = input.symbol("BINANCE:BTCUSDT", "BTC Filter Symbol")
+
+donchianLen = input.int(30, "Donchian Entry Length", minval=2)
+exitLen = input.int(15, "Donchian Exit Length", minval=2)
+emaFastLen = input.int(20, "EMA Fast Length", minval=1)
+emaSlowLen = input.int(200, "EMA Slow Length", minval=1)
+atrLen = input.int(14, "ATR Length", minval=1)
+atrStopMultiplier = input.float(2.5, "ATR Stop Multiplier", minval=0.1, step=0.1)
+
+// === Current timeframe indicators ===
+ema20 = ta.ema(close, emaFastLen)
+ema200 = ta.ema(close, emaSlowLen)
+atr = ta.atr(atrLen)
+donchianEntryHigh = ta.highest(high, donchianLen)[1]
+donchianExitLow = ta.lowest(low, exitLen)
+
+// === BTC correlation filter, no lookahead ===
+// XRP LONG entries are blocked when BTC is weak. BTC chart does not double-filter itself.
+btcClose = request.security(btcFilterSymbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+btcEma20 = request.security(btcFilterSymbol, timeframe.period, ta.ema(close, emaFastLen), barmerge.gaps_off, barmerge.lookahead_off)
+isBtcBotSymbol = str.contains(botSymbol, "BTCUSDT")
+btcLongAllowed = isBtcBotSymbol ? true : btcClose > btcEma20
+
+// === Position state ===
+var bool inLong = false
+var float entryPrice = na
+var float entryAtr = na
+var float activeStopLoss = na
+var string activeRegime = ""
+
+// === Alert builders ===
+buildEntryMessage(string signalId, string regimeName) =>
+    '{"secret":"' + secret + '","signal_id":"' + signalId + '","symbol":"' + botSymbol + '","side":"LONG","signal":"ENTRY","timeframe":"' + timeframe.period + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atr) + ',"strategy":"autocoin_v6b_long_demo","timestamp":"' + str.tostring(time) + '","regime":"' + regimeName + '","ema200":' + str.tostring(ema200) + ',"stopLoss":' + str.tostring(activeStopLoss) + '}'
+
+buildExitMessage(string signalId, string reasonText) =>
+    '{"secret":"' + secret + '","signal_id":"' + signalId + '","symbol":"' + botSymbol + '","side":"LONG","signal":"EXIT","reason":"' + reasonText + '","price":' + str.tostring(close) + ',"strategy":"autocoin_v6b_long_demo","timestamp":"' + str.tostring(time) + '","regime":"' + activeRegime + '","ema200":' + str.tostring(ema200) + ',"stopLoss":' + str.tostring(activeStopLoss) + '}'
+
+// === LONG-only entry ===
+donchianBreakout = close > donchianEntryHigh
+longEntrySignal = barstate.isconfirmed and not inLong and btcLongAllowed and donchianBreakout
+
+if longEntrySignal
+    entryPrice := close
+    entryAtr := atr
+    activeStopLoss := math.max(donchianExitLow, entryPrice - entryAtr * atrStopMultiplier)
+    activeRegime := "DONCHIAN_LONG"
+    inLong := true
+    signalId = botSymbol + "-" + str.tostring(time) + "-entry"
+    alert(buildEntryMessage(signalId, activeRegime), alert.freq_once_per_bar_close)
+
+// === Trailing stop maintenance ===
+if barstate.isconfirmed and inLong and not na(entryPrice) and not na(entryAtr)
+    fixedAtrStop = entryPrice - entryAtr * atrStopMultiplier
+    activeStopLoss := math.max(activeStopLoss, donchianExitLow, fixedAtrStop)
+
+// === LONG-only full exit ===
+donchianExitHit = inLong and close < donchianExitLow
+trailingStopHit = inLong and not na(activeStopLoss) and close <= activeStopLoss
+longExitSignal = barstate.isconfirmed and inLong and (donchianExitHit or trailingStopHit)
+
+if longExitSignal
+    reasonText = donchianExitHit ? "donchian_exit" : "trailing_stop"
+    signalId = botSymbol + "-" + str.tostring(time) + "-exit"
+    alert(buildExitMessage(signalId, reasonText), alert.freq_once_per_bar_close)
+    inLong := false
+    activeRegime := ""
+    entryPrice := na
+    entryAtr := na
+    activeStopLoss := na
+
+// === Visuals ===
+plot(ema20, "EMA20", color=color.yellow)
+plot(ema200, "EMA200", color=color.red)
+plot(donchianEntryHigh, "Donchian Entry High", color=color.new(color.lime, 0))
+plot(donchianExitLow, "Donchian Exit Low", color=color.new(color.red, 20))
+plot(activeStopLoss, "Active Stop", color=color.new(color.white, 0), style=plot.style_linebr, linewidth=2)
+plotshape(longEntrySignal, "ENTRY", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="ENTRY")
+plotshape(longExitSignal, "EXIT", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="EXIT")

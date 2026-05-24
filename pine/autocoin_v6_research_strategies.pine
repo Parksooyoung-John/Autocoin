@@ -1,0 +1,187 @@
+//@version=5
+// AutoCoin v6 Research Strategies
+// - Backtest-only strategy() script. Do not use this file for Demo/Live webhook alerts.
+// - Compare DONCHIAN, ADAPTIVE_SUPERTREND, and UT_HULL modes with identical sizing/commission settings.
+// - First-pass parameters are intentionally fixed to reduce overfitting.
+strategy("AutoCoin v6 Research Strategies", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.05, pyramiding=0, process_orders_on_close=true)
+
+// === Strategy mode ===
+strategyMode = input.string("DONCHIAN", "Strategy Mode", options=["DONCHIAN", "ADAPTIVE_SUPERTREND", "UT_HULL"])
+
+// === Shared inputs ===
+btcFilterSymbol = input.symbol("BINANCE:BTCUSDT", "BTC Filter Symbol")
+emaFastLen = input.int(20, "EMA Fast Length", minval=1)
+emaMidLen = input.int(60, "EMA Mid Length", minval=1)
+emaSlowLen = input.int(200, "EMA Slow Length", minval=1)
+atrLen = input.int(14, "ATR Length", minval=1)
+atrSmaLen = input.int(20, "ATR SMA Length", minval=1)
+atrStopMult = input.float(2.5, "ATR Stop Multiplier", minval=0.1, step=0.1)
+abnormalAtrMult = input.float(3.0, "Abnormal ATR Filter", minval=1.0, step=0.1)
+
+// === v6-B Donchian fixed parameters ===
+donchianEntryLen = input.int(40, "Donchian Entry High Length", minval=2)
+donchianExitLen = input.int(20, "Donchian Exit Low Length", minval=2)
+
+// === v6-A Adaptive SuperTrend fixed parameters ===
+volSmaLen = input.int(20, "Volume SMA Length", minval=1)
+adxLen = input.int(14, "ADX Length", minval=1)
+adxSmoothing = input.int(14, "ADX Smoothing", minval=1)
+adxThreshold = input.float(25.0, "ADX Score Threshold", minval=1.0, step=0.5)
+superTrendAtrLen = input.int(10, "SuperTrend ATR Length", minval=1)
+superTrendFactor = input.float(3.0, "SuperTrend Factor", minval=0.1, step=0.1)
+scoreThreshold = input.int(70, "Adaptive SuperTrend Score Threshold", minval=0, maxval=80)
+
+// === v6-C UT Bot + Hull fixed parameters ===
+utAtrLen = input.int(10, "UT Bot ATR Length", minval=1)
+utSensitivity = input.float(1.0, "UT Bot Sensitivity", minval=0.1, step=0.1)
+hullLen = input.int(55, "Hull MA Length", minval=1)
+
+// === Shared indicators ===
+ema20 = ta.ema(close, emaFastLen)
+ema60 = ta.ema(close, emaMidLen)
+ema200 = ta.ema(close, emaSlowLen)
+atr = ta.atr(atrLen)
+atrSma = ta.sma(atr, atrSmaLen)
+volSma20 = ta.sma(volume, volSmaLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxSmoothing)
+[superTrend, superTrendDirection] = ta.supertrend(superTrendFactor, superTrendAtrLen)
+
+// TradingView's ta.supertrend() convention: direction < 0 is bullish, direction > 0 is bearish.
+superTrendBullish = superTrendDirection < 0
+superTrendBearish = superTrendDirection > 0
+
+// === BTC correlation filter, no lookahead ===
+btcClose = request.security(btcFilterSymbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+btcEma20 = request.security(btcFilterSymbol, timeframe.period, ta.ema(close, emaFastLen), barmerge.gaps_off, barmerge.lookahead_off)
+isBtcChart = str.contains(syminfo.ticker, "BTCUSDT")
+btcLongAllowed = isBtcChart ? true : btcClose > btcEma20
+
+// === Shared filters ===
+abnormalVolatility = atr > atrSma * abnormalAtrMult
+flat = strategy.position_size == 0
+longPosition = strategy.position_size > 0
+canEnter = barstate.isconfirmed and flat and not abnormalVolatility
+
+// === Persistent trade state ===
+var float activeStop = na
+var float entryAtr = na
+var string activeMode = ""
+
+// === v6-B: Donchian Turtle Breakout ===
+donchianBreakout = close > ta.highest(high, donchianEntryLen)[1]
+donchianTrendOk = close > ema200
+donchianEntrySignal = strategyMode == "DONCHIAN" and canEnter and donchianBreakout and donchianTrendOk and btcLongAllowed
+
+if donchianEntrySignal
+    entryAtr := atr
+    initialStop = math.max(ta.lowest(low, donchianExitLen), close - entryAtr * atrStopMult)
+    activeStop := initialStop
+    activeMode := "DONCHIAN"
+    strategy.entry("V6_LONG", strategy.long, comment="DONCHIAN_LONG")
+
+if barstate.isconfirmed and longPosition and activeMode == "DONCHIAN" and not na(entryAtr)
+    fixedAtrStop = strategy.position_avg_price - entryAtr * atrStopMult
+    trailingDonchianStop = ta.lowest(low, donchianExitLen)
+    activeStop := math.max(activeStop, trailingDonchianStop, fixedAtrStop)
+
+donchianExitSignal = barstate.isconfirmed and longPosition and activeMode == "DONCHIAN" and not na(activeStop) and close < activeStop
+
+// === v6-A: Adaptive SuperTrend Score ===
+volumeScore = volume > volSma20 * 1.2 ? 15 : 0
+atrDisplacementScore = close > ema20 + atr * 0.5 ? 15 : 0
+adxScore = adx > adxThreshold ? 15 : 0
+emaAlignmentScore = ema20 > ema60 and ema60 > ema200 ? 20 : 0
+btcTrendScore = btcLongAllowed ? 15 : 0
+adaptiveScore = volumeScore + atrDisplacementScore + adxScore + emaAlignmentScore + btcTrendScore
+
+// SuperTrend bullish is a required gate, not a score component. This prevents bearish SuperTrend entries
+// where the SuperTrend line sits above price and would create an invalid LONG stop.
+adaptiveEntrySignal = strategyMode == "ADAPTIVE_SUPERTREND" and canEnter and superTrendBullish and adaptiveScore >= scoreThreshold
+
+if adaptiveEntrySignal
+    entryAtr := atr
+    // v6-A intentionally uses current ATR while in position. SuperTrend is the primary trailing line;
+    // current ATR is a secondary defensive stop that adapts as volatility changes.
+    activeStop := math.max(superTrend, close - atr * atrStopMult)
+    activeMode := "ADAPTIVE_SUPERTREND"
+    strategy.entry("V6_LONG", strategy.long, comment="ADAPTIVE_ST_LONG")
+
+if barstate.isconfirmed and longPosition and activeMode == "ADAPTIVE_SUPERTREND"
+    activeStop := math.max(superTrend, strategy.position_avg_price - atr * atrStopMult)
+
+adaptiveExitSignal = barstate.isconfirmed and longPosition and activeMode == "ADAPTIVE_SUPERTREND" and (close < activeStop or superTrendBearish)
+
+// === v6-C: UT Bot + Hull ===
+utAtr = ta.atr(utAtrLen)
+utLoss = utSensitivity * utAtr
+var float utStop = na
+prevUtStop = nz(utStop[1], close)
+if close > prevUtStop and close[1] > prevUtStop
+    utStop := math.max(prevUtStop, close - utLoss)
+else if close < prevUtStop and close[1] < prevUtStop
+    utStop := math.min(prevUtStop, close + utLoss)
+else if close > prevUtStop
+    utStop := close - utLoss
+else
+    utStop := close + utLoss
+
+hull = ta.hma(close, hullLen)
+hullRising = hull > hull[1]
+utBullishTurn = close > utStop and close[1] <= utStop[1]
+utBearishTurn = close < utStop and close[1] >= utStop[1]
+
+utHullEntrySignal = strategyMode == "UT_HULL" and canEnter and utBullishTurn and hullRising and btcLongAllowed
+
+if utHullEntrySignal
+    entryAtr := atr
+    activeStop := utStop
+    activeMode := "UT_HULL"
+    strategy.entry("V6_LONG", strategy.long, comment="UT_HULL_LONG")
+
+if barstate.isconfirmed and longPosition and activeMode == "UT_HULL"
+    activeStop := utStop
+
+utHullExitSignal = barstate.isconfirmed and longPosition and activeMode == "UT_HULL" and (utBearishTurn or not hullRising)
+
+// === Shared exits and reset ===
+if donchianExitSignal or adaptiveExitSignal or utHullExitSignal
+    strategy.close("V6_LONG", comment="V6_LONG_EXIT")
+    activeStop := na
+    entryAtr := na
+    activeMode := ""
+
+if barstate.isconfirmed and flat and strategy.position_size[1] != 0
+    activeStop := na
+    entryAtr := na
+    activeMode := ""
+
+// === Visuals ===
+plot(ema20, "EMA20", color=color.yellow)
+plot(ema60, "EMA60", color=color.orange)
+plot(ema200, "EMA200", color=color.red)
+plot(superTrend, "SuperTrend", color=superTrendBullish ? color.lime : color.fuchsia, linewidth=2)
+plot(utStop, "UT Bot Stop", color=color.new(color.aqua, 20))
+plot(hull, "Hull MA", color=hullRising ? color.lime : color.red)
+plot(activeStop, "Active Stop", color=color.new(color.white, 0), style=plot.style_linebr, linewidth=2)
+
+plotshape(donchianEntrySignal, "Donchian Entry", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="D")
+plotshape(adaptiveEntrySignal, "Adaptive ST Entry", shape.triangleup, location.belowbar, color=color.green, size=size.small, text="A")
+plotshape(utHullEntrySignal, "UT Hull Entry", shape.triangleup, location.belowbar, color=color.aqua, size=size.small, text="U")
+plotshape(donchianExitSignal or adaptiveExitSignal or utHullExitSignal, "Exit", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="X")
+
+var table statsTable = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    winRate = strategy.closedtrades > 0 ? strategy.wintrades / strategy.closedtrades * 100 : 0.0
+    profitFactor = strategy.grossloss != 0 ? strategy.grossprofit / math.abs(strategy.grossloss) : na
+    table.cell(statsTable, 0, 0, "Mode", text_color=color.white)
+    table.cell(statsTable, 1, 0, strategyMode, text_color=color.white)
+    table.cell(statsTable, 0, 1, "Score", text_color=color.white)
+    table.cell(statsTable, 1, 1, str.tostring(adaptiveScore) + "/80", text_color=color.white)
+    table.cell(statsTable, 0, 2, "Win Rate", text_color=color.white)
+    table.cell(statsTable, 1, 2, str.tostring(winRate, "#.##") + "%", text_color=color.white)
+    table.cell(statsTable, 0, 3, "Profit Factor", text_color=color.white)
+    table.cell(statsTable, 1, 3, na(profitFactor) ? "n/a" : str.tostring(profitFactor, "#.##"), text_color=color.white)
+    table.cell(statsTable, 0, 4, "Closed Trades", text_color=color.white)
+    table.cell(statsTable, 1, 4, str.tostring(strategy.closedtrades), text_color=color.white)
+    table.cell(statsTable, 0, 5, "Active Stop", text_color=color.white)
+    table.cell(statsTable, 1, 5, na(activeStop) ? "n/a" : str.tostring(activeStop, format.mintick), text_color=color.white)
